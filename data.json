@@ -1,0 +1,36 @@
+{
+  "weeks": {
+    "2026-W10": {
+      "id": "2026-W10",
+      "weekplan": [
+        {
+          "text": "Sprint backlog afronden",
+          "done": true
+        }
+      ],
+      "beginMeeting": {
+        "watGedaan": "",
+        "stageVoortgang": "",
+        "vragenMiquel": "",
+        "vragenDimitri": "",
+        "notities": ""
+      },
+      "eindeMeeting": {
+        "watGedaan": "",
+        "stageVoortgang": "",
+        "terugblikGelukt": "",
+        "terugblikTegenaan": "",
+        "vragenMiquel": "",
+        "vragenDimitri": "",
+        "notities": ""
+      }
+    }
+  },
+  "stage": {
+    "completedWeeks": [
+      "2026-W07",
+      "2026-W08",
+      "2026-W09"
+    ]
+  }
+}
