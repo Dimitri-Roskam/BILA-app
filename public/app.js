@@ -161,20 +161,75 @@ function formatCountdown(targetDate) {
   return { text: text.trim(), urgent: urgency };
 }
 
-// ── API ──
+// ── localStorage helpers ──
+let serverAvailable = false;
+
+function lsKey(type, id) {
+  return `bila_${type}${id ? '_' + id : ''}`;
+}
+
+function lsLoad(type, id) {
+  try {
+    const raw = localStorage.getItem(lsKey(type, id));
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function lsSave(type, id, data) {
+  try {
+    localStorage.setItem(lsKey(type, id), JSON.stringify(data));
+  } catch { /* quota exceeded, ignore */ }
+}
+
+function createEmptyWeek(weekId) {
+  return {
+    id: weekId,
+    weekplan: [],
+    beginMeeting: {
+      watGedaan: '', stageVoortgang: '',
+      vragenMiquel: '', vragenDimitri: '', notities: ''
+    },
+    eindeMeeting: {
+      watGedaan: '', stageVoortgang: '',
+      terugblikGelukt: '', terugblikTegenaan: '',
+      vragenMiquel: '', vragenDimitri: '', notities: ''
+    }
+  };
+}
+
+// ── API (with localStorage fallback) ──
 async function loadWeek() {
   const weekId = getCurrentWeekId();
-  const response = await fetch(`/api/weeks/${weekId}`);
-  weekData = await response.json();
+  try {
+    const response = await fetch(`/api/weeks/${weekId}`);
+    if (!response.ok) throw new Error(response.status);
+    weekData = await response.json();
+    serverAvailable = true;
+    lsSave('week', weekId, weekData);
+  } catch {
+    // Server unavailable → load from localStorage
+    weekData = lsLoad('week', weekId) || createEmptyWeek(weekId);
+    serverAvailable = false;
+  }
   render();
-  renderOverview(); // re-highlight current viewed week
+  renderOverview();
+  updateConnectionUI();
 }
 
 async function saveWeek() {
   const weekId = getCurrentWeekId();
+  // Always save locally
+  lsSave('week', weekId, weekData);
+
+  if (!serverAvailable) {
+    showSaveStatus('Lokaal opgeslagen');
+    setTimeout(() => showSaveStatus(''), 2000);
+    return;
+  }
+
   showSaveStatus('Opslaan...');
   try {
-    await fetch(`/api/weeks/${weekId}`, {
+    const resp = await fetch(`/api/weeks/${weekId}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -182,10 +237,12 @@ async function saveWeek() {
       },
       body: JSON.stringify(weekData)
     });
+    if (!resp.ok) throw new Error(resp.status);
     showSaveStatus('Opgeslagen');
     setTimeout(() => showSaveStatus(''), 2000);
   } catch {
-    showSaveStatus('Fout bij opslaan');
+    showSaveStatus('Lokaal opgeslagen');
+    setTimeout(() => showSaveStatus(''), 2000);
   }
 }
 
@@ -197,14 +254,18 @@ function debouncedSave() {
 async function loadStageData() {
   try {
     const response = await fetch('/api/stage');
+    if (!response.ok) throw new Error(response.status);
     stageData = await response.json();
+    lsSave('stage', null, stageData);
   } catch {
-    stageData = { completedWeeks: [] };
+    stageData = lsLoad('stage', null) || { completedWeeks: [] };
   }
   renderOverview();
 }
 
 async function saveStageData() {
+  lsSave('stage', null, stageData);
+  if (!serverAvailable) return;
   try {
     await fetch('/api/stage', {
       method: 'PUT',
@@ -215,7 +276,7 @@ async function saveStageData() {
       body: JSON.stringify(stageData)
     });
   } catch {
-    // silent fail
+    // silent fail, already saved locally
   }
 }
 
@@ -230,14 +291,20 @@ function toggleWeekCompleted(weekId) {
   renderOverview();
 }
 
-// ── SSE ──
+// ── SSE (optional, only when server available) ──
 function connectSSE() {
-  eventSource = new EventSource('/api/events');
+  try {
+    eventSource = new EventSource('/api/events');
+  } catch {
+    setConnectionStatus(false);
+    return;
+  }
 
   eventSource.addEventListener('connected', (e) => {
     const data = JSON.parse(e.data);
     clientId = data.clientId;
-    setConnectionStatus(true);
+    serverAvailable = true;
+    updateConnectionUI();
   });
 
   eventSource.addEventListener('update', (e) => {
@@ -249,17 +316,30 @@ function connectSSE() {
 
   eventSource.addEventListener('stage-update', (e) => {
     stageData = JSON.parse(e.data);
+    lsSave('stage', null, stageData);
     renderOverview();
   });
 
   eventSource.onerror = () => {
-    setConnectionStatus(false);
+    serverAvailable = false;
+    updateConnectionUI();
     setTimeout(() => {
-      if (eventSource.readyState === EventSource.CLOSED) {
+      if (eventSource && eventSource.readyState === EventSource.CLOSED) {
         connectSSE();
       }
-    }, 3000);
+    }, 5000);
   };
+}
+
+function updateConnectionUI() {
+  const dot = document.getElementById('connection-status');
+  if (serverAvailable) {
+    dot.className = 'connection-dot connected';
+    dot.title = 'Verbonden met server';
+  } else {
+    dot.className = 'connection-dot disconnected';
+    dot.title = 'Offline – data lokaal opgeslagen';
+  }
 }
 
 function applyRemoteUpdate(newWeekData) {
@@ -295,9 +375,8 @@ function showSaveStatus(text) {
 }
 
 function setConnectionStatus(connected) {
-  const el = document.getElementById('connection-status');
-  el.className = 'connection-dot ' + (connected ? 'connected' : 'disconnected');
-  el.title = connected ? 'Verbonden' : 'Verbinding verbroken';
+  serverAvailable = connected;
+  updateConnectionUI();
 }
 
 function updateWeekLabel() {
