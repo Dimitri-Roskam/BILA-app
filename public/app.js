@@ -204,11 +204,32 @@ function createEmptyWeek(weekId) {
 }
 
 // ── API (with localStorage fallback) ──
+function isWeekEmpty(week) {
+  if (!week) return true;
+  const m = week.beginMeeting || {};
+  const e = week.eindeMeeting || {};
+  return !week.weekplan?.length
+    && !m.watGedaan && !m.stageVoortgang && !m.vragenMiquel && !m.vragenDimitri && !m.notities
+    && !e.watGedaan && !e.stageVoortgang && !e.vragenMiquel && !e.vragenDimitri && !e.notities
+    && !e.terugblikGelukt && !e.terugblikTegenaan;
+}
+
+async function pushLocalToServer(weekId, localWeek) {
+  try {
+    await fetch(`${API_BASE}/api/weeks/${weekId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId || '' },
+      body: JSON.stringify(localWeek)
+    });
+  } catch { /* silent */ }
+}
+
 async function loadWeek() {
   const weekId = getCurrentWeekId();
+  const localWeek = lsLoad('week', weekId);
 
   // 1. Show local data immediately
-  weekData = lsLoad('week', weekId) || createEmptyWeek(weekId);
+  weekData = localWeek || createEmptyWeek(weekId);
   render();
   renderOverview();
 
@@ -218,12 +239,18 @@ async function loadWeek() {
     if (!response.ok) throw new Error(response.status);
     const serverWeek = await response.json();
     serverAvailable = true;
-    lsSave('week', weekId, serverWeek);
-    // Only re-render if still viewing same week
-    if (getCurrentWeekId() === weekId) {
-      weekData = serverWeek;
-      render();
-      renderOverview();
+
+    // If server is empty but we have local data → restore to server
+    if (isWeekEmpty(serverWeek) && localWeek && !isWeekEmpty(localWeek)) {
+      pushLocalToServer(weekId, localWeek);
+      // Keep local data, don't overwrite with empty server data
+    } else {
+      lsSave('week', weekId, serverWeek);
+      if (getCurrentWeekId() === weekId) {
+        weekData = serverWeek;
+        render();
+        renderOverview();
+      }
     }
   } catch {
     serverAvailable = false;
@@ -267,17 +294,31 @@ function debouncedSave() {
 }
 
 async function loadStageData() {
+  const localStage = lsLoad('stage', null);
+
   // 1. Show local data immediately
-  stageData = lsLoad('stage', null) || { completedWeeks: [] };
+  stageData = localStage || { completedWeeks: [] };
   renderOverview();
 
   // 2. Try server in background
   try {
     const response = await fetch(`${API_BASE}/api/stage`);
     if (!response.ok) throw new Error(response.status);
-    stageData = await response.json();
-    lsSave('stage', null, stageData);
-    renderOverview();
+    const serverStage = await response.json();
+
+    // If server is empty but we have local completed weeks → restore to server
+    if ((!serverStage.completedWeeks || !serverStage.completedWeeks.length)
+        && localStage?.completedWeeks?.length) {
+      fetch(`${API_BASE}/api/stage`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId || '' },
+        body: JSON.stringify(localStage)
+      }).catch(() => {});
+    } else {
+      stageData = serverStage;
+      lsSave('stage', null, stageData);
+      renderOverview();
+    }
   } catch {
     // keep local data
   }
